@@ -5,6 +5,9 @@
 
 #include <VL53L0X.h>
 #include <Wire.h>
+#include <BitBang_I2C.h>
+
+static int iSDA, iSCL; // pin numbers when using BitBang I2C
 
 // Defines /////////////////////////////////////////////////////////////////////
 
@@ -57,10 +60,20 @@ void VL53L0X::setAddress(uint8_t new_addr)
 // enough unless a cover glass is added.
 // If io_2v8 (optional) is true or not given, the sensor is configured for 2V8
 // mode.
-bool VL53L0X::init(bool io_2v8)
+bool VL53L0X::init(bool io_2v8, uint8_t iSDAPin, uint8_t iSCLPin, int32_t iSpeed)
 {
   // VL53L0X_DataInit() begin
+  iSDA = iSDAPin; iSCL = iSCLPin;
 
+  if (iSDA != -1)
+  {
+    I2CInit(iSDAPin, iSCLPin, iSpeed);
+  }
+  else
+  {
+    Wire.begin();
+    Wire.setClock(iSpeed);
+  }
   // sensor uses 1V8 mode for I/O by default; switch to 2V8 mode if necessary
   if (io_2v8)
   {
@@ -281,32 +294,69 @@ bool VL53L0X::init(bool io_2v8)
 // Write an 8-bit register
 void VL53L0X::writeReg(uint8_t reg, uint8_t value)
 {
-  Wire.beginTransmission(address);
-  Wire.write(reg);
-  Wire.write(value);
-  last_status = Wire.endTransmission();
+  if (iSDA != -1) // using bit bang
+  {
+  uint8_t ucTemp[2];
+    ucTemp[0] = reg;
+    ucTemp[1] = value;
+    I2CWrite(address, ucTemp, 2);
+    last_status = 0; // assume success
+  }
+  else
+  {
+    Wire.beginTransmission(address);
+    Wire.write(reg);
+    Wire.write(value);
+    last_status = Wire.endTransmission();
+  }
 }
 
 // Write a 16-bit register
 void VL53L0X::writeReg16Bit(uint8_t reg, uint16_t value)
 {
-  Wire.beginTransmission(address);
-  Wire.write(reg);
-  Wire.write((value >> 8) & 0xFF); // value high byte
-  Wire.write( value       & 0xFF); // value low byte
-  last_status = Wire.endTransmission();
+  if (iSDA != -1)
+  {
+    uint8_t ucTemp[4];
+    ucTemp[0] = reg;
+    ucTemp[1] = (uint8_t)(value >> 8);
+    ucTemp[2] = (uint8_t)value;
+    I2CWrite(address, ucTemp, 3);
+    last_status = 0; // assume success
+  }
+  else
+  {
+    Wire.beginTransmission(address);
+    Wire.write(reg);
+    Wire.write((value >> 8) & 0xFF); // value high byte
+    Wire.write( value       & 0xFF); // value low byte
+    last_status = Wire.endTransmission();
+  }
 }
 
 // Write a 32-bit register
 void VL53L0X::writeReg32Bit(uint8_t reg, uint32_t value)
 {
-  Wire.beginTransmission(address);
-  Wire.write(reg);
-  Wire.write((value >> 24) & 0xFF); // value highest byte
-  Wire.write((value >> 16) & 0xFF);
-  Wire.write((value >>  8) & 0xFF);
-  Wire.write( value        & 0xFF); // value lowest byte
-  last_status = Wire.endTransmission();
+  if (iSDA != -1)
+  {
+    uint8_t ucTemp[8];
+    ucTemp[0] = reg;
+    ucTemp[1] = (uint8_t)(value >> 24);
+    ucTemp[2] = (uint8_t)(value >> 16);
+    ucTemp[3] = (uint8_t)(value >> 8);
+    ucTemp[4] = (uint8_t)value;
+    I2CWrite(address, ucTemp, 5);
+    last_status = 0; // assume success
+  }
+  else
+  {
+    Wire.beginTransmission(address);
+    Wire.write(reg);
+    Wire.write((value >> 24) & 0xFF); // value highest byte
+    Wire.write((value >> 16) & 0xFF);
+    Wire.write((value >>  8) & 0xFF);
+    Wire.write( value        & 0xFF); // value lowest byte
+    last_status = Wire.endTransmission();
+  }
 }
 
 // Read an 8-bit register
@@ -314,13 +364,19 @@ uint8_t VL53L0X::readReg(uint8_t reg)
 {
   uint8_t value;
 
-  Wire.beginTransmission(address);
-  Wire.write(reg);
-  last_status = Wire.endTransmission();
+  if (iSDA != -1)
+  {
+    I2CReadRegister(address, reg, &value, 1);
+  }
+  else
+  {
+    Wire.beginTransmission(address);
+    Wire.write(reg);
+    last_status = Wire.endTransmission();
 
-  Wire.requestFrom(address, (uint8_t)1);
-  value = Wire.read();
-
+    Wire.requestFrom(address, (uint8_t)1);
+    value = Wire.read();
+  }
   return value;
 }
 
@@ -328,33 +384,25 @@ uint8_t VL53L0X::readReg(uint8_t reg)
 uint16_t VL53L0X::readReg16Bit(uint8_t reg)
 {
   uint16_t value;
+  
+  if (iSDA != -1)
+  {
+  uint8_t ucTemp[2];
+    I2CReadRegister(address, reg, ucTemp, 2);
+    value = (ucTemp[0] << 8);
+    value += ucTemp[1];
+    last_status = 0;
+  }
+  else
+  {
+    Wire.beginTransmission(address);
+    Wire.write(reg);
+    last_status = Wire.endTransmission();
 
-  Wire.beginTransmission(address);
-  Wire.write(reg);
-  last_status = Wire.endTransmission();
-
-  Wire.requestFrom(address, (uint8_t)2);
-  value  = (uint16_t)Wire.read() << 8; // value high byte
-  value |=           Wire.read();      // value low byte
-
-  return value;
-}
-
-// Read a 32-bit register
-uint32_t VL53L0X::readReg32Bit(uint8_t reg)
-{
-  uint32_t value;
-
-  Wire.beginTransmission(address);
-  Wire.write(reg);
-  last_status = Wire.endTransmission();
-
-  Wire.requestFrom(address, (uint8_t)4);
-  value  = (uint32_t)Wire.read() << 24; // value highest byte
-  value |= (uint32_t)Wire.read() << 16;
-  value |= (uint16_t)Wire.read() <<  8;
-  value |=           Wire.read();       // value lowest byte
-
+    Wire.requestFrom(address, (uint8_t)2);
+    value  = (uint16_t)Wire.read() << 8; // value high byte
+    value |=           Wire.read();      // value low byte
+  }
   return value;
 }
 
@@ -362,30 +410,49 @@ uint32_t VL53L0X::readReg32Bit(uint8_t reg)
 // starting at the given register
 void VL53L0X::writeMulti(uint8_t reg, uint8_t const * src, uint8_t count)
 {
-  Wire.beginTransmission(address);
-  Wire.write(reg);
-
-  while (count-- > 0)
+  if (iSDA != -1)
   {
-    Wire.write(*(src++));
+  uint8_t ucTemp[16];
+    ucTemp[0] = reg;
+    memcpy(&ucTemp[1], src, count);
+    I2CWrite(address, ucTemp, count+1);
+    last_status = 0;
   }
+  else
+  {
+    Wire.beginTransmission(address);
+    Wire.write(reg);
 
-  last_status = Wire.endTransmission();
+    while (count-- > 0)
+    {
+      Wire.write(*(src++));
+    }
+
+    last_status = Wire.endTransmission();
+  }
 }
 
 // Read an arbitrary number of bytes from the sensor, starting at the given
 // register, into the given array
 void VL53L0X::readMulti(uint8_t reg, uint8_t * dst, uint8_t count)
 {
-  Wire.beginTransmission(address);
-  Wire.write(reg);
-  last_status = Wire.endTransmission();
-
-  Wire.requestFrom(address, count);
-
-  while (count-- > 0)
+  if (iSDA != -1)
   {
-    *(dst++) = Wire.read();
+    I2CReadRegister(address, reg, dst, count);
+    last_status = 0;
+  }
+  else
+  {
+    Wire.beginTransmission(address);
+    Wire.write(reg);
+    last_status = Wire.endTransmission();
+
+    Wire.requestFrom(address, count);
+
+    while (count-- > 0)
+    {
+      *(dst++) = Wire.read();
+    }
   }
 }
 
